@@ -49,13 +49,27 @@ stdenv.mkDerivation rec {
     runHook preInstall
 
     compact_platform="${currentPlatform.compactPlatform}"
-    mkdir -p $out/versions/${version}/$compact_platform
-    cp -r * $out/versions/${version}/$compact_platform/
+    compact_dir="$out/versions/${version}/$compact_platform"
+
+    mkdir -p "$compact_dir"
+    cp -r * "$compact_dir"/
+
+    # The upstream `compactc` wrapper computes its own directory with
+    # `dirname "$0"`, which resolves to bin/ when the wrapper is invoked
+    # through the bin/compactc symlink, and it then fails to find the sibling
+    # compactc.bin. Hardcode the absolute toolchain directory (an immutable
+    # store path) so the wrapper works regardless of how it is called, while
+    # keeping the bin/compactc symlink intact for the compact devtool, which
+    # reads the symlink's target string to locate the compiler.
+    chmod +w "$compact_dir/compactc"
+    substituteInPlace "$compact_dir/compactc" \
+      --replace-fail 'thisdir="$(cd $(dirname $0) ; pwd -P)"' \
+      "thisdir=\"$compact_dir\""
 
     mkdir -p $out/bin
-    ln -s $out/versions/${version}/$compact_platform/compactc $out/bin/compactc
-    ln -s $out/versions/${version}/$compact_platform/fixup-compact $out/bin/fixup-compact
-    ln -s $out/versions/${version}/$compact_platform/format-compact $out/bin/format-compact
+    ln -s $compact_dir/compactc $out/bin/compactc
+    ln -s $compact_dir/fixup-compact $out/bin/fixup-compact
+    ln -s $compact_dir/format-compact $out/bin/format-compact
 
     runHook postInstall
   '';
