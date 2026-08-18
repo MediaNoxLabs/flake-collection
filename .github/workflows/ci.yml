@@ -40,13 +40,21 @@ jobs:
           git diff --exit-code
 
       - name: Debug flake show
+        continue-on-error: true
         shell: bash
         run: |
           nix --version
-          nix flake show --json | jq . | head -60
+          nix flake show --json > /tmp/show.json
+          echo "--- legacy schema (.packages) ---"
+          jq '.packages // empty' /tmp/show.json
+          echo "--- inventory schema (.inventory.packages) ---"
+          jq '.inventory.packages // empty' /tmp/show.json
 
       # Discover every package the flake exposes for this runner's system so
-      # newly added packages are gated without workflow edits.
+      # newly added packages are gated without workflow edits. Handles both
+      # the pre-inventory schema (.packages.<system>) and the inventory
+      # schema (.inventory.packages.output.children.<system>.children)
+      # emitted by Determinate Nix 3.x.
       - name: Build every flake package
         shell: bash
         run: |
@@ -57,7 +65,11 @@ jobs:
             *) echo "::error::unexpected runner.os ${{ runner.os }}" >&2; exit 1 ;;
           esac
 
-          pkgs="$(nix flake show --json | jq -r --arg system "$system" '.packages[$system] | keys[]')"
+          pkgs="$(nix flake show --json | jq -r --arg system "$system" '
+            (if has("inventory")
+             then .inventory.packages.output.children[$system].children
+             else .packages[$system] end
+            ) // {} | keys[]')"
           if [ -z "$pkgs" ]; then
             echo "::error::no packages discovered for $system" >&2
             exit 1
