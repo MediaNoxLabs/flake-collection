@@ -9,7 +9,7 @@ Facts established during planning (measured locally on x86_64-linux): the Linux 
 **Goals:**
 - Prove, per supported platform, that every flake package output builds and its binaries execute with the pinned versions.
 - Prove the toolchain end-to-end (zkir + key generation) on both platforms' binaries.
-- Keep CI self-maintaining: new packages are gated without workflow edits.
+- Keep CI self-maintaining: new packages are *evaluated* without workflow edits (via `nix flake check`); build + smoke coverage begins with a one-line `PACKAGES` list edit (see Decision 2).
 
 **Non-Goals:**
 - Changing any package definition, version, or the parameter set (2p1–2p19 stays; trimming was rejected as a CI-cost measure in favor of lane-level exclusion).

@@ -9,10 +9,15 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   ci:
     name: CI (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -33,7 +38,7 @@ jobs:
 
       - uses: nix-community/cache-nix-action@v7
         with:
-          primary-key: nix-${{ runner.os }}-packages-${{ hashFiles('flake.lock', 'nix/**/*.nix') }}
+          primary-key: nix-${{ runner.os }}-packages-${{ hashFiles('flake.lock', 'flake.nix', 'nix/**/*.nix') }}
           restore-prefixes-first-match: nix-${{ runner.os }}-packages-
           gc-max-store-size-linux: 7500M
           gc-max-store-size-macos: 7500M
@@ -56,36 +61,51 @@ jobs:
           for pkg in $PACKAGES; do
             # midnight-circuit-params is a linkFarm of fixed-output fetches:
             # byte-identical across systems, so the Linux lane proves it.
-            if [ "${{ runner.os }}" = macOS ] && [ "$pkg" = midnight-circuit-params ]; then
-              echo "Skipping #$pkg on macOS (platform-independent output, built on the Linux lane)"
+            if [ "$RUNNER_OS" = macOS ] && [ "$pkg" = midnight-circuit-params ]; then
+              echo "Skipping $pkg on macOS (platform-independent output, built on the Linux lane)"
               continue
             fi
-            echo "Building #$pkg"
+            echo "Building $pkg"
             nix build .#"$pkg"
           done
 
-          # Expose store paths to later steps (cache hits, no rebuild).
-          echo "COMPACT_TOOLCHAIN_OUT=$(nix build --no-link --print-out-paths .#compact-toolchain)" >> "$GITHUB_ENV"
-          echo "COMPACT_MIDNIGHT_OUT=$(nix build --no-link --print-out-paths .#compact-midnight)" >> "$GITHUB_ENV"
-          if [ "${{ runner.os }}" = Linux ]; then
-            echo "CIRCUIT_PARAMS_OUT=$(nix build --no-link --print-out-paths .#midnight-circuit-params)" >> "$GITHUB_ENV"
+          # Expose store paths to later steps (cache hits, no rebuild). Assign
+          # to a local var first so a failed `nix build` trips `set -e`;
+          # piping straight into $GITHUB_ENV would mask the failure as success.
+          toolchain="$(nix build --no-link --print-out-paths .#compact-toolchain)"
+          echo "COMPACT_TOOLCHAIN_OUT=$toolchain" >> "$GITHUB_ENV"
+          midnight="$(nix build --no-link --print-out-paths .#compact-midnight)"
+          echo "COMPACT_MIDNIGHT_OUT=$midnight" >> "$GITHUB_ENV"
+          if [ "$RUNNER_OS" = Linux ]; then
+            params="$(nix build --no-link --print-out-paths .#midnight-circuit-params)"
+            echo "CIRCUIT_PARAMS_OUT=$params" >> "$GITHUB_ENV"
           fi
 
       - name: Smoke-test packaged binaries
         shell: bash
         run: |
           set -euo pipefail
+          # The expected version comes from the package definition, not a
+          # hardcoded literal, so a version bump updates this assert for free.
           ver="$("$COMPACT_TOOLCHAIN_OUT/bin/compactc" --version)"
           echo "compactc --version: $ver"
+          expected="$(nix eval --raw .#compact-toolchain.version)"
           # -w pins the exact version (rejects e.g. 0.31.10).
-          grep -qw 0.31.1 <<<"$ver"
+          if ! grep -qw "$expected" <<<"$ver"; then
+            echo "::error::compactc reports '$ver' but package version is '$expected'" >&2
+            exit 1
+          fi
 
           "$COMPACT_TOOLCHAIN_OUT/bin/fixup-compact" --help > /dev/null
           "$COMPACT_TOOLCHAIN_OUT/bin/format-compact" --help > /dev/null
 
           ver="$("$COMPACT_MIDNIGHT_OUT/bin/compact" --version)"
           echo "compact --version: $ver"
-          grep -qw 0.5.1 <<<"$ver"
+          expected="$(nix eval --raw .#compact-midnight.version)"
+          if ! grep -qw "$expected" <<<"$ver"; then
+            echo "::error::compact reports '$ver' but package version is '$expected'" >&2
+            exit 1
+          fi
 
       - name: Assert circuit-parameter completeness
         if: runner.os == 'Linux'
@@ -110,16 +130,24 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # On Linux the hash-pinned linkFarm is already built; pre-seed the
+          # param cache from it so the compile fetches nothing from Midnight's
+          # S3 (removes the external fetch and the trust gap on that lane).
+          if [ "$RUNNER_OS" = Linux ]; then
+            mkdir -p "$HOME/.cache/midnight/zk-params"
+            cp -RLn "$CIRCUIT_PARAMS_OUT"/* "$HOME/.cache/midnight/zk-params/"
+          fi
           out="$(mktemp -d)"
           "$COMPACT_TOOLCHAIN_OUT/bin/compactc" test/lock.compact "$out"
 
-          if [ ! -f "$out/contract/index.js" ]; then
+          # -s also rejects a truncated zero-byte artifact, not just a missing one.
+          if [ ! -s "$out/contract/index.js" ]; then
             echo "::error::missing contract/index.js" >&2
             exit 1
           fi
           for c in get set clear; do
             for f in "zkir/$c.zkir" "zkir/$c.bzkir" "keys/$c.prover" "keys/$c.verifier"; do
-              if [ ! -f "$out/$f" ]; then
+              if [ ! -s "$out/$f" ]; then
                 echo "::error::missing $f" >&2
                 exit 1
               fi
@@ -130,7 +158,8 @@ jobs:
       - name: Flake check
         shell: bash
         run: |
-          if [ "${{ runner.os }}" = Linux ]; then
+          set -euo pipefail
+          if [ "$RUNNER_OS" = Linux ]; then
             # Evaluates the aarch64-darwin outputs from Linux (no builds).
             nix flake check --all-systems
           else
