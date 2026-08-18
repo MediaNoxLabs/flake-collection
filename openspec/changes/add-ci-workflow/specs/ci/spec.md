@@ -16,18 +16,18 @@ CI SHALL run on every pull request targeting `main` and every push to `main`, wi
 - **THEN** CI jobs for both `x86_64-linux` and `aarch64-darwin` run
 
 ### Requirement: Every package output is built per platform
-CI SHALL dynamically discover all packages exposed by the flake for the runner's system and build each one; packages added to the flake in the future MUST be gated without workflow edits. Platform-independent outputs (fixed-output derivations whose content is byte-identical across systems, e.g. the circuit-parameter linkFarm) SHALL be built on the Linux lane only. The Linux lane SHALL run `nix flake check --all-systems` (evaluating the Darwin outputs from Linux); the macOS lane SHALL run `nix flake check`.
+CI SHALL build every package named in an explicit `PACKAGES` list maintained in the workflow, for the runner's system; the list SHALL stay in sync with the flake's package set, so adding a package means a one-line workflow edit. As an evaluation backstop, `nix flake check` SHALL evaluate every package output on both lanes, so evaluation regressions (system asserts, platform/license metadata) are gated even before a new package's name reaches the list. Platform-independent outputs (fixed-output derivations whose content is byte-identical across systems, e.g. the circuit-parameter linkFarm) SHALL be built on the Linux lane only. The Linux lane SHALL run `nix flake check --all-systems` (evaluating the Darwin outputs from Linux); the macOS lane SHALL run `nix flake check`.
 
 #### Scenario: New package added to the flake
 - **WHEN** a pull request adds a new package to the flake outputs
-- **THEN** CI builds it on both lanes automatically, with no workflow modification
+- **THEN** `nix flake check` evaluates it on both lanes automatically, and it gains build and runtime verification once its name is added to the workflow's `PACKAGES` list
 
 #### Scenario: Platform-independent output
 - **WHEN** CI builds the circuit-parameter package
 - **THEN** it is built and hash-verified on the Linux lane only, and the macOS lane skips it
 
 #### Scenario: A derivation fails to evaluate or build for a supported system
-- **WHEN** any discovered package output fails to build on its lane
+- **WHEN** any listed package output fails to build on its lane
 - **THEN** the CI job for that lane fails
 
 ### Requirement: Packaged binaries are executed and version-asserted

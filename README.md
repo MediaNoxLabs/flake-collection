@@ -79,8 +79,9 @@ nix flake check # validate the flake
 
 Pull requests and pushes to `main` run CI on both supported systems
 (`ubuntu-latest` for `x86_64-linux`, `macos-15` for `aarch64-darwin`). Every
-flake package is built — discovered dynamically via `nix flake show`, so new
-packages are gated automatically — and its binaries are executed with version
+flake package named in the workflow's `PACKAGES` list is built — keep the list
+in sync with the flake when adding packages; `nix flake check` still evaluates
+all package outputs on both lanes — and built binaries are executed with version
 assertions against the pins. The Linux lane additionally verifies that `nix fmt`
 is a no-op and that the `midnight-circuit-params` linkFarm contains the full
 19-entry parameter set. Both lanes compile `test/lock.compact` end-to-end with

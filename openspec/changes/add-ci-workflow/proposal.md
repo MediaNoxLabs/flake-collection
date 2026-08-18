@@ -5,7 +5,7 @@ The flake packages prebuilt Midnight binaries for `x86_64-linux` and `aarch64-da
 ## What Changes
 
 - Add `.github/workflows/ci.yml`: a matrix CI over `ubuntu-latest` (x86_64-linux) and `macos-15` (aarch64-darwin) that builds, verifies, and smoke-runs every flake package output.
-- Dynamically discover packages to build (`nix flake show`), so newly added packages are automatically gated without editing the workflow.
+- Build every package named in an explicit `PACKAGES` list in the workflow (kept in sync with the flake's package set; `nix flake check` still evaluates new packages on both lanes as a backstop).
 - Gate the build with runtime verification: version-string asserts on `compactc`/`compact`, a linkFarm entry-count assert (19 circuit-param files), and an end-to-end `compactc` compile of a committed test circuit asserting `zkir/`, `keys/`, and `contract/` artifacts.
 - Build platform-independent outputs (`midnight-circuit-params`) on the Linux lane only; run the end-to-end compile on both lanes (platform-dependent binaries).
 - Format gate on the Linux lane: `nix fmt` must be a no-op (`git diff --exit-code`).

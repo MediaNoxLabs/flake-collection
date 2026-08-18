@@ -17,6 +17,15 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-15]
+    env:
+      # Packages to build and smoke-test. Keep in sync with the flake's
+      # package set (nix/packages/default.nix). `nix flake check` still
+      # evaluates every package output on both lanes, so evaluation
+      # regressions are caught even if this list lags.
+      PACKAGES: >-
+        compact-toolchain
+        compact-midnight
+        midnight-circuit-params
     steps:
       - uses: actions/checkout@v4
 
@@ -39,52 +48,26 @@ jobs:
           nix fmt
           git diff --exit-code
 
-      # Discover every package the flake exposes for this runner's system so
-      # newly added packages are gated without workflow edits. Handles both
-      # the pre-inventory schema (.packages.<system>) and the inventory
-      # schema (.inventory.packages.output.children.<system>.children)
-      # emitted by Determinate Nix 3.x.
       - name: Build every flake package
         shell: bash
         run: |
           set -euo pipefail
-          case "${{ runner.os }}" in
-            Linux) system=x86_64-linux ;;
-            macOS) system=aarch64-darwin ;;
-            *) echo "::error::unexpected runner.os ${{ runner.os }}" >&2; exit 1 ;;
-          esac
 
-          pkgs="$(nix flake show --json | jq -r --arg system "$system" '
-            (if has("inventory")
-             then .inventory.packages.output.children[$system].children
-             else .packages[$system] end
-            ) // {} | keys[]')"
-          if [ -z "$pkgs" ]; then
-            echo "::error::no packages discovered for $system" >&2
-            exit 1
-          fi
-
-          args=""
-          for pkg in $pkgs; do
+          for pkg in $PACKAGES; do
             # midnight-circuit-params is a linkFarm of fixed-output fetches:
             # byte-identical across systems, so the Linux lane proves it.
-            if [ "$system" = aarch64-darwin ] && [ "$pkg" = midnight-circuit-params ]; then
+            if [ "${{ runner.os }}" = macOS ] && [ "$pkg" = midnight-circuit-params ]; then
               echo "Skipping #$pkg on macOS (platform-independent output, built on the Linux lane)"
               continue
             fi
             echo "Building #$pkg"
-            args="$args .#$pkg"
+            nix build .#"$pkg"
           done
-
-          if [ -n "$args" ]; then
-            # shellcheck disable=SC2086
-            nix build --keep-going $args
-          fi
 
           # Expose store paths to later steps (cache hits, no rebuild).
           echo "COMPACT_TOOLCHAIN_OUT=$(nix build --no-link --print-out-paths .#compact-toolchain)" >> "$GITHUB_ENV"
           echo "COMPACT_MIDNIGHT_OUT=$(nix build --no-link --print-out-paths .#compact-midnight)" >> "$GITHUB_ENV"
-          if [ "$system" = x86_64-linux ]; then
+          if [ "${{ runner.os }}" = Linux ]; then
             echo "CIRCUIT_PARAMS_OUT=$(nix build --no-link --print-out-paths .#midnight-circuit-params)" >> "$GITHUB_ENV"
           fi
 
