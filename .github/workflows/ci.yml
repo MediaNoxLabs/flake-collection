@@ -39,17 +39,6 @@ jobs:
           nix fmt
           git diff --exit-code
 
-      - name: Debug flake show
-        continue-on-error: true
-        shell: bash
-        run: |
-          nix --version
-          nix flake show --json > /tmp/show.json
-          echo "--- legacy schema (.packages) ---"
-          jq '.packages // empty' /tmp/show.json
-          echo "--- inventory schema (.inventory.packages) ---"
-          jq '.inventory.packages // empty' /tmp/show.json
-
       # Discover every package the flake exposes for this runner's system so
       # newly added packages are gated without workflow edits. Handles both
       # the pre-inventory schema (.packages.<system>) and the inventory
