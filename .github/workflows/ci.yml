@@ -39,6 +39,12 @@ jobs:
           nix fmt
           git diff --exit-code
 
+      - name: Debug flake show
+        shell: bash
+        run: |
+          nix --version
+          nix flake show --json | jq . | head -60
+
       # Discover every package the flake exposes for this runner's system so
       # newly added packages are gated without workflow edits.
       - name: Build every flake package
