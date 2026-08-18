@@ -1,0 +1,148 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    name: CI (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-15]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: DeterminateSystems/nix-installer-action@v4
+
+      - uses: nix-community/cache-nix-action@v7
+        with:
+          primary-key: nix-${{ runner.os }}-packages-${{ hashFiles('flake.lock', 'nix/**/*.nix') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-packages-
+          gc-max-store-size-linux: 7500M
+          gc-max-store-size-macos: 7500M
+
+      # The formatter (nixfmt-tree) is platform-independent; gating it once on
+      # the Linux lane is sufficient.
+      - name: Check Nix formatting
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          nix fmt
+          git diff --exit-code
+
+      # Discover every package the flake exposes for this runner's system so
+      # newly added packages are gated without workflow edits.
+      - name: Build every flake package
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${{ runner.os }}" in
+            Linux) system=x86_64-linux ;;
+            macOS) system=aarch64-darwin ;;
+            *) echo "::error::unexpected runner.os ${{ runner.os }}" >&2; exit 1 ;;
+          esac
+
+          pkgs="$(nix flake show --json | jq -r --arg system "$system" '.packages[$system] | keys[]')"
+          if [ -z "$pkgs" ]; then
+            echo "::error::no packages discovered for $system" >&2
+            exit 1
+          fi
+
+          args=""
+          for pkg in $pkgs; do
+            # midnight-circuit-params is a linkFarm of fixed-output fetches:
+            # byte-identical across systems, so the Linux lane proves it.
+            if [ "$system" = aarch64-darwin ] && [ "$pkg" = midnight-circuit-params ]; then
+              echo "Skipping #$pkg on macOS (platform-independent output, built on the Linux lane)"
+              continue
+            fi
+            echo "Building #$pkg"
+            args="$args .#$pkg"
+          done
+
+          if [ -n "$args" ]; then
+            # shellcheck disable=SC2086
+            nix build --keep-going $args
+          fi
+
+          # Expose store paths to later steps (cache hits, no rebuild).
+          echo "COMPACT_TOOLCHAIN_OUT=$(nix build --no-link --print-out-paths .#compact-toolchain)" >> "$GITHUB_ENV"
+          echo "COMPACT_MIDNIGHT_OUT=$(nix build --no-link --print-out-paths .#compact-midnight)" >> "$GITHUB_ENV"
+          if [ "$system" = x86_64-linux ]; then
+            echo "CIRCUIT_PARAMS_OUT=$(nix build --no-link --print-out-paths .#midnight-circuit-params)" >> "$GITHUB_ENV"
+          fi
+
+      - name: Smoke-test packaged binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          ver="$("$COMPACT_TOOLCHAIN_OUT/bin/compactc" --version)"
+          echo "compactc --version: $ver"
+          # -w pins the exact version (rejects e.g. 0.31.10).
+          grep -qw 0.31.1 <<<"$ver"
+
+          "$COMPACT_TOOLCHAIN_OUT/bin/fixup-compact" --help > /dev/null
+          "$COMPACT_TOOLCHAIN_OUT/bin/format-compact" --help > /dev/null
+
+          ver="$("$COMPACT_MIDNIGHT_OUT/bin/compact" --version)"
+          echo "compact --version: $ver"
+          grep -qw 0.5.1 <<<"$ver"
+
+      - name: Assert circuit-parameter completeness
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected=19
+          for i in $(seq 1 "$expected"); do
+            if [ ! -e "$CIRCUIT_PARAMS_OUT/bls_midnight_2p$i" ]; then
+              echo "::error::missing linkFarm entry bls_midnight_2p$i" >&2
+              exit 1
+            fi
+          done
+          actual="$(find "$CIRCUIT_PARAMS_OUT" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')"
+          echo "linkFarm entries: $actual (expected exactly $expected)"
+          [ "$actual" -eq "$expected" ]
+
+      # Compiling a witness-bearing circuit exercises zkir generation and
+      # prover/verifier key creation. The toolchain fetches the small circuit
+      # params it needs over the network unless the cache is pre-seeded.
+      - name: End-to-end compile of test circuit
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$(mktemp -d)"
+          "$COMPACT_TOOLCHAIN_OUT/bin/compactc" test/lock.compact "$out"
+
+          if [ ! -f "$out/contract/index.js" ]; then
+            echo "::error::missing contract/index.js" >&2
+            exit 1
+          fi
+          for c in get set clear; do
+            for f in "zkir/$c.zkir" "zkir/$c.bzkir" "keys/$c.prover" "keys/$c.verifier"; do
+              if [ ! -f "$out/$f" ]; then
+                echo "::error::missing $f" >&2
+                exit 1
+              fi
+            done
+          done
+          echo "e2e artifacts OK: contract/, zkir/{get,set,clear}.zkir, keys/{get,set,clear}.{prover,verifier}"
+
+      - name: Flake check
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}" = Linux ]; then
+            # Evaluates the aarch64-darwin outputs from Linux (no builds).
+            nix flake check --all-systems
+          else
+            nix flake check
+          fi

@@ -1,0 +1,73 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Midnight Network contributors
+//
+// Derived from the `lock.compact` example in the Midnight documentation
+// "Writing" guide: https://github.com/midnightntwrk/midnight-docs
+//
+// Modification: the `language_version` pragma was bumped from 0.16 to 0.23
+// to match the compactc 0.31.1 toolchain packaged by this flake.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not
+// use this file except in compliance with the License. You may obtain a copy
+// of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+// WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+// License for the specific language governing permissions and limitations
+// under the License.
+
+pragma language_version 0.23;
+
+import CompactStandardLibrary;
+
+enum State {
+  UNSET,
+  SET
+}
+
+export ledger authority: Bytes<32>;
+
+export ledger value: Uint<64>;
+
+export ledger state: State;
+
+export ledger round: Counter;
+
+constructor(sk: Bytes<32>, v: Uint<64>) {
+  authority = disclose(publicKey(round, sk));
+  value = disclose(v);
+  state = State.SET;
+}
+
+circuit publicKey(round: Field, sk: Bytes<32>): Bytes<32> {
+  return persistentHash<Vector<3, Bytes<32>>>(
+           [pad(32, "midnight:examples:lock:pk"), round as Bytes<32>, sk]);
+}
+
+export circuit get(): Uint<64> {
+  assert(state == State.SET, "Attempted to get uninitialized value");
+  return value;
+}
+
+witness secretKey(): Bytes<32>;
+
+export circuit set(v: Uint<64>): [] {
+  assert(state == State.UNSET, "Attempted to set initialized value");
+  const sk = secretKey();
+  const pk = publicKey(round, sk);
+  authority = disclose(pk);
+  value = disclose(v);
+  state = State.SET;
+}
+
+export circuit clear(): [] {
+  assert(state == State.SET, "Attempted to clear uninitialized value");
+  const sk = secretKey();
+  const pk = publicKey(round, sk);
+  assert(authority == pk, "Attempted to clear without authorization");
+  state = State.UNSET;
+  round.increment(1);
+}
