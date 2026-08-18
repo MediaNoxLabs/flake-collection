@@ -1,0 +1,20 @@
+## 1. Test fixture
+
+- [ ] 1.1 Add `test/lock.compact` with an Apache-2.0 attribution header crediting `midnightntwrk/midnight-docs` (writing guide's `lock.compact`), pragma `language_version 0.23` to match compactc 0.31.1
+- [ ] 1.2 Verify locally: `nix build .#compact-toolchain` then compile the fixture and confirm `zkir/*.zkir`, `keys/*.prover|verifier` per exported circuit, and `contract/index.js` are emitted
+
+## 2. CI workflow
+
+- [ ] 2.1 Create `.github/workflows/ci.yml`: name, `on: pull_request/push → main`, `permissions: contents: read`, `strategy.matrix.os: [ubuntu-latest, macos-15]` (fail-fast disabled)
+- [ ] 2.2 Steps: `actions/checkout@v4` → `DeterminateSystems/nix-installer-action@v4` → `nix-community/cache-nix-action@v7` (`primary-key: nix-${{ runner.os }}-packages-${{ hashFiles('flake.lock', 'nix/**/*.nix') }}`, `restore-prefixes-first-match: nix-${{ runner.os }}-packages-`, `gc-max-store-size-linux: 7500M`, `gc-max-store-size-macos: 7500M`)
+- [ ] 2.3 Linux-only prelude step: `nix fmt` then `git diff --exit-code`
+- [ ] 2.4 Dynamic build step: enumerate `nix flake show --json` packages for the runner system via jq; exclude `midnight-circuit-params` on macOS; `nix build --keep-going` them into per-package `./result*` links (or use `nix build --print-out-paths` capturing an env var)
+- [ ] 2.5 Smoke + asserts step: run `compactc --version` (must contain `0.31.1`), `fixup-compact --help`, `format-compact --help` from the toolchain output; run `compact --version` (must contain `0.5.1`)
+- [ ] 2.6 Linux-only params assert: the linkFarm output contains exactly the 19 expected `bls_midnight_2p*` entries
+- [ ] 2.7 E2e step (both lanes): compile `test/lock.compact` with the packaged `compactc` into a temp dir; assert `contract/index.js`, `zkir/{get,set,clear}.zkir` (+ `.bzkir`), and `keys/{get,set,clear}.{prover,verifier}` all exist
+- [ ] 2.8 Flake check step: `nix flake check --all-systems` on Linux, `nix flake check` on macOS
+
+## 3. Delivery
+
+- [ ] 3.1 Open feature branch (`ci/add-workflow`) and pull request; confirm both matrix lanes run and pass on the PR itself
+- [ ] 3.2 Update `README.md` development section to mention CI coverage (both systems, e2e compile)
