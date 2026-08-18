@@ -16,5 +16,5 @@
 
 ## 3. Delivery
 
-- [ ] 3.1 Open feature branch (`ci/add-workflow`) and pull request; confirm both matrix lanes run and pass on the PR itself
-- [ ] 3.2 Update `README.md` development section to mention CI coverage (both systems, e2e compile)
+- [x] 3.1 Open feature branch (`ci/add-workflow`) and pull request; confirm both matrix lanes run and pass on the PR itself
+- [x] 3.2 Update `README.md` development section to mention CI coverage (both systems, e2e compile)
