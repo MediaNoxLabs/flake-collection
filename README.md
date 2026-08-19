@@ -75,6 +75,24 @@ nix fmt         # format Nix sources
 nix flake check # validate the flake
 ```
 
+## Continuous integration
+
+Pull requests and pushes to `main` run CI on both supported systems
+(`ubuntu-latest` for `x86_64-linux`, `macos-15` for `aarch64-darwin`). Every
+flake package is built (`midnight-circuit-params` is built on Linux only — its
+fixed-output contents are byte-identical across systems) — the workflow's
+`PACKAGES` list is checked against the flake's actual package set on every run,
+so it cannot lag — and built binaries are executed with version assertions
+against the pins. The Linux lane additionally verifies that `nix fmt` is a
+no-op and that the `midnight-circuit-params` linkFarm contains the full
+19-entry parameter set. Both lanes compile `test/lock.compact` end-to-end
+twice — with the packaged `compactc` directly and through the `compact`
+devtool — asserting the emitted `contract/`, `zkir/`, and `keys/` artifacts.
+The Linux lane pre-seeds its param cache from the built linkFarm (so those
+compiles make no network fetch); on macOS the compile fetches the small circuit
+parameters it needs over the network unless `~/.cache/midnight/zk-params` is
+pre-seeded (see above).
+
 ## License
 
 Apache-2.0, matching the upstream [compact](https://github.com/midnightntwrk/compact)
