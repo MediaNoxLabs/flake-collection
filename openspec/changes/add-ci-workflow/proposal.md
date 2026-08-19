@@ -9,7 +9,7 @@ The flake packages prebuilt Midnight binaries for `x86_64-linux` and `aarch64-da
 - Gate the build with runtime verification: version-string asserts on `compactc`/`compact`, a linkFarm entry-count assert (19 circuit-param files), and an end-to-end `compactc` compile of a committed test circuit asserting `zkir/`, `keys/`, and `contract/` artifacts.
 - Build platform-independent outputs (`midnight-circuit-params`) on the Linux lane only; run the end-to-end compile on both lanes (platform-dependent binaries).
 - Format gate on the Linux lane: `nix fmt` must be a no-op (`git diff --exit-code`).
-- Nix store caching via `nix-community/cache-nix-action@v7` keyed on `hashFiles('flake.lock', 'nix/**/*.nix')`, mirroring `input-output-hk/lace-id-portal`'s CI.
+- Nix store caching via `nix-community/cache-nix-action@v7` keyed on `hashFiles('flake.lock', 'flake.nix', 'nix/**/*.nix')`, mirroring `input-output-hk/lace-id-portal`'s CI.
 - Deliver via a feature branch and pull request.
 
 ## Capabilities
