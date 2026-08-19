@@ -9,12 +9,12 @@
 - [x] 2.2 Steps: `actions/checkout@v4` → `DeterminateSystems/nix-installer-action@v4` → `nix-community/cache-nix-action@v7` (`primary-key: nix-${{ runner.os }}-packages-${{ hashFiles('flake.lock', 'nix/**/*.nix') }}`, `restore-prefixes-first-match: nix-${{ runner.os }}-packages-`, `gc-max-store-size-linux: 7500M`, `gc-max-store-size-macos: 7500M`)
 - [x] 2.3 Linux-only prelude step: `nix fmt` then `git diff --exit-code`
 - [x] 2.4 Build step: iterate an explicit `PACKAGES` list (job env) with one `nix build .#<name>` per package; exclude `midnight-circuit-params` on macOS; capture store paths into env vars via `--print-out-paths` (revised from dynamic `nix flake show --json` discovery after Determinate Nix 3.x's `inventory` schema broke it — see design decision 2)
-- [x] 2.5 Smoke + asserts step: run `compactc --version` (must contain `0.31.1`), `fixup-compact --help`, `format-compact --help` from the toolchain output; run `compact --version` (must contain `0.5.1`)
+- [x] 2.5 Smoke + asserts step: run `compactc --version`, `fixup-compact --help`, `format-compact --help` from the toolchain output; run `compact --version`. Expected versions are derived at runtime via `nix eval .#<pkg>.version` (not hardcoded) and matched with `grep -qFw`
 - [x] 2.6 Linux-only params assert: the linkFarm output contains exactly the 19 expected `bls_midnight_2p*` entries
 - [x] 2.7 E2e step (both lanes): compile `test/lock.compact` with the packaged `compactc` into a temp dir; assert `contract/index.js`, `zkir/{get,set,clear}.zkir` (+ `.bzkir`), and `keys/{get,set,clear}.{prover,verifier}` all exist
 - [x] 2.8 Flake check step: `nix flake check --all-systems` on Linux, `nix flake check` on macOS
 
 ## 3. Delivery
 
-- [ ] 3.1 Open feature branch (`ci/add-workflow`) and pull request; confirm both matrix lanes run and pass on the PR itself
+- [x] 3.1 Open feature branch (`ci/add-workflow`) and pull request; confirm both matrix lanes run and pass on the PR itself
 - [x] 3.2 Update `README.md` development section to mention CI coverage (both systems, e2e compile)

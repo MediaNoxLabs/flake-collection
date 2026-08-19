@@ -5,7 +5,10 @@
 // "Writing" guide: https://github.com/midnightntwrk/midnight-docs
 //
 // Modification: the `language_version` pragma was bumped from 0.16 to 0.23
-// to match the compactc 0.31.1 toolchain packaged by this flake.
+// to match the compactc 0.31.1 toolchain packaged by this flake. Derived
+// from the example as it appeared at the time; the upstream guide has since
+// been restructured, so treat this as an adaptation rather than a verbatim
+// copy.
 //
 // Licensed under the Apache License, Version 2.0 (the "License"); you may not
 // use this file except in compliance with the License. You may obtain a copy

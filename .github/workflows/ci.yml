@@ -11,7 +11,9 @@ permissions:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # Cancel superseded runs on PRs only; every push to main deserves a
+  # completed CI record (branch protection may require it).
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   ci:
@@ -58,6 +60,19 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Fail loudly if PACKAGES drifts from the flake's package set: a
+          # package present in the flake but missing from the list would
+          # otherwise ship with zero build and zero runtime coverage.
+          system="$(nix eval --raw --impure --expr builtins.currentSystem)"
+          declared="$(nix eval --raw ".#packages.$system" \
+            --apply 'p: builtins.concatStringsSep "\n" (builtins.attrNames p)' | sort)"
+          listed="$(printf '%s\n' $PACKAGES | sort)"
+          if [ "$declared" != "$listed" ]; then
+            echo "::error::PACKAGES is out of sync with packages.$system:" >&2
+            diff <(printf '%s\n' "$declared") <(printf '%s\n' "$listed") >&2 || true
+            exit 1
+          fi
+
           for pkg in $PACKAGES; do
             # midnight-circuit-params is a linkFarm of fixed-output fetches:
             # byte-identical across systems, so the Linux lane proves it.
@@ -66,20 +81,12 @@ jobs:
               continue
             fi
             echo "Building $pkg"
-            nix build .#"$pkg"
+            # Assign to a local var first so a failed `nix build` trips `set -e`;
+            # piping straight into $GITHUB_ENV would mask the failure as success.
+            out="$(nix build --no-link --print-out-paths .#"$pkg")"
+            name="$(echo "${pkg//-/_}_OUT" | tr '[:lower:]' '[:upper:]')"
+            echo "$name=$out" >> "$GITHUB_ENV"
           done
-
-          # Expose store paths to later steps (cache hits, no rebuild). Assign
-          # to a local var first so a failed `nix build` trips `set -e`;
-          # piping straight into $GITHUB_ENV would mask the failure as success.
-          toolchain="$(nix build --no-link --print-out-paths .#compact-toolchain)"
-          echo "COMPACT_TOOLCHAIN_OUT=$toolchain" >> "$GITHUB_ENV"
-          midnight="$(nix build --no-link --print-out-paths .#compact-midnight)"
-          echo "COMPACT_MIDNIGHT_OUT=$midnight" >> "$GITHUB_ENV"
-          if [ "$RUNNER_OS" = Linux ]; then
-            params="$(nix build --no-link --print-out-paths .#midnight-circuit-params)"
-            echo "CIRCUIT_PARAMS_OUT=$params" >> "$GITHUB_ENV"
-          fi
 
       - name: Smoke-test packaged binaries
         shell: bash
@@ -90,8 +97,10 @@ jobs:
           ver="$("$COMPACT_TOOLCHAIN_OUT/bin/compactc" --version)"
           echo "compactc --version: $ver"
           expected="$(nix eval --raw .#compact-toolchain.version)"
-          # -w pins the exact version (rejects e.g. 0.31.10).
-          if ! grep -qw "$expected" <<<"$ver"; then
+          [ -n "$expected" ] || { echo "::error::empty version attr on .#compact-toolchain" >&2; exit 1; }
+          # -Fw pins the exact literal version as a whole word (rejects 0.31.10
+          # and treats `.` literally rather than as a regex wildcard).
+          if ! grep -qFw -- "$expected" <<<"$ver"; then
             echo "::error::compactc reports '$ver' but package version is '$expected'" >&2
             exit 1
           fi
@@ -102,7 +111,8 @@ jobs:
           ver="$("$COMPACT_MIDNIGHT_OUT/bin/compact" --version)"
           echo "compact --version: $ver"
           expected="$(nix eval --raw .#compact-midnight.version)"
-          if ! grep -qw "$expected" <<<"$ver"; then
+          [ -n "$expected" ] || { echo "::error::empty version attr on .#compact-midnight" >&2; exit 1; }
+          if ! grep -qFw -- "$expected" <<<"$ver"; then
             echo "::error::compact reports '$ver' but package version is '$expected'" >&2
             exit 1
           fi
@@ -114,31 +124,47 @@ jobs:
           set -euo pipefail
           expected=19
           for i in $(seq 1 "$expected"); do
-            if [ ! -e "$CIRCUIT_PARAMS_OUT/bls_midnight_2p$i" ]; then
+            if [ ! -e "$MIDNIGHT_CIRCUIT_PARAMS_OUT/bls_midnight_2p$i" ]; then
               echo "::error::missing linkFarm entry bls_midnight_2p$i" >&2
               exit 1
             fi
           done
-          actual="$(find "$CIRCUIT_PARAMS_OUT" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')"
+          actual="$(find "$MIDNIGHT_CIRCUIT_PARAMS_OUT" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')"
           echo "linkFarm entries: $actual (expected exactly $expected)"
-          [ "$actual" -eq "$expected" ]
+          if [ "$actual" -ne "$expected" ]; then
+            echo "::error::linkFarm has $actual entries, expected $expected" >&2
+            exit 1
+          fi
 
       # Compiling a witness-bearing circuit exercises zkir generation and
-      # prover/verifier key creation. The toolchain fetches the small circuit
-      # params it needs over the network unless the cache is pre-seeded.
+      # prover/verifier key creation. On Linux the param cache is pre-seeded
+      # from the hash-pinned linkFarm; the macOS lane fetches the small
+      # circuit params it needs over the network.
       - name: End-to-end compile of test circuit
         shell: bash
         run: |
           set -euo pipefail
-          # On Linux the hash-pinned linkFarm is already built; pre-seed the
-          # param cache from it so the compile fetches nothing from Midnight's
-          # S3 (removes the external fetch and the trust gap on that lane).
           if [ "$RUNNER_OS" = Linux ]; then
+            # Pre-seed the param cache from the already-built linkFarm so the
+            # compile fetches nothing from Midnight's S3 (removes the external
+            # fetch and the trust gap on this lane). -R (not -L) copies the
+            # store symlinks instead of dereferencing ~200 MB of params; the
+            # /nix/store paths outlive the job.
             mkdir -p "$HOME/.cache/midnight/zk-params"
-            cp -RLn "$CIRCUIT_PARAMS_OUT"/* "$HOME/.cache/midnight/zk-params/"
+            cp -Rn "$MIDNIGHT_CIRCUIT_PARAMS_OUT"/* "$HOME/.cache/midnight/zk-params/"
+            seeded="$(find "$HOME/.cache/midnight/zk-params" | wc -l | tr -d ' ')"
           fi
           out="$(mktemp -d)"
           "$COMPACT_TOOLCHAIN_OUT/bin/compactc" test/lock.compact "$out"
+          if [ "$RUNNER_OS" = Linux ]; then
+            # Make the "fetches nothing" claim loud: if compactc had to fetch
+            # params, the cache dir grew and the pre-seed no longer matches.
+            now="$(find "$HOME/.cache/midnight/zk-params" | wc -l | tr -d ' ')"
+            if [ "$now" -ne "$seeded" ]; then
+              echo "::error::pre-seed incomplete: compactc fetched $((now - seeded)) new cache entries over the network" >&2
+              exit 1
+            fi
+          fi
 
           # -s also rejects a truncated zero-byte artifact, not just a missing one.
           if [ ! -s "$out/contract/index.js" ]; then

@@ -37,8 +37,8 @@ Facts established during planning (measured locally on x86_64-linux): the Linux 
 ## Risks / Trade-offs
 
 - [First run per cache key downloads ~200 MB (Linux) / ~265 MiB closures (macOS)] → accepted; steady-state PRs restore from GitHub Actions cache; eviction is LRU and self-healing.
-- [E2e compile fetches ~1.6 MB of params from Midnight's S3 bucket at run time] → accepted (README documents this behavior for humans too); a bucket outage would fail CI loudly rather than mask breakage. Future option: pre-seed the cache from the built linkFarm on the Linux lane.
-- [New package not on the list ships without build coverage] → accepted trade-off: `nix flake check` still evaluates it on both lanes; build + smoke coverage is a one-line `PACKAGES` edit made alongside `nix/packages/default.nix`; fully automatic build gating (mirroring packages into `checks`) would modify `nix/`, out of scope.
+- [E2e compile fetches ~1.6 MB of params from Midnight's S3 bucket at run time] → resolved on the Linux lane: the compile step pre-seeds `~/.cache/midnight/zk-params` from the already-built linkFarm (copying symlinks, not dereferencing ~200 MB) and asserts afterwards that the cache did not grow, so a fetch is a hard failure. The macOS lane still fetches (README documents the same behavior for humans); a bucket outage fails it loudly rather than masking breakage.
+- [New package not on the list ships without build coverage] → guarded: the build step first diffs `PACKAGES` against `nix eval .#packages.<system>` attrNames (a stable eval API, unlike the `flake show` presentation layer rejected in Decision 2) and fails on drift, so the list cannot lag silently.
 - [macos-15 arm64 runner image drift] → pinned label keeps architecture stable; image content changes are absorbed by the nix store cache.
 - [Upstream compactc wrapper drift breaks `substituteInPlace --replace-fail`] → the build fails loudly on the lane that regressed; that is the desired signal, not a flake.
 
